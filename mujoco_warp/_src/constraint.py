@@ -210,6 +210,90 @@ def _efc_contact_pyramidal(
     )
 
 
+# @wp.kernel
+# def _efc_contact_pyramidal(
+#     m: types.Model,
+#     d: types.Data,
+#     refsafe: bool,
+# ):
+#     conid, dimid = wp.tid()
+#
+#     if conid >= d.ncon[0]:
+#         return
+#
+#     if d.contact.dim[conid] != 3:
+#         return
+#
+#     # Adjust contact penetration
+#     penetration_buffer = 0.08
+#     pos = d.contact.dist[conid] - (d.contact.includemargin[conid] - penetration_buffer)
+#
+#     active = pos < 0
+#
+#     if active:
+#         efcid = wp.atomic_add(d.nefc, 0, 1)
+#         worldid = d.contact.worldid[conid]
+#         d.efc.worldid[efcid] = worldid
+#
+#         body1 = m.geom_bodyid[d.contact.geom[conid][0]]
+#         body2 = m.geom_bodyid[d.contact.geom[conid][1]]
+#
+#         mu = d.contact.friction[conid][0]
+#         epsilon = 1e-3
+#
+#         # Compute effective inverse mass for friction constraint
+#         invweight = m.body_invweight0[body1, 0] + m.body_invweight0[body2, 0]
+#         invweight = invweight + mu * mu * invweight
+#         invweight = invweight * 2.0 * mu * mu / m.opt.impratio
+#
+#         dimid2 = dimid / 2 + 1  # which tangential direction to use
+#
+#         # Warp-compatible conditional
+#         sign = float(1.0)
+#         if dimid % 2 != 0:
+#             sign = float(-1.0)
+#
+#         Jqvel = float(0.0)
+#
+#         for i in range(m.nv):
+#             diff_0 = float(0.0)
+#             diff_i = float(0.0)
+#
+#             for xyz in range(3):
+#                 con_pos = d.contact.pos[conid]
+#                 jac1p = _jac(m, d, con_pos, xyz, body1, i, worldid)
+#                 jac2p = _jac(m, d, con_pos, xyz, body2, i, worldid)
+#                 jac_dif = jac2p - jac1p
+#
+#                 diff_0 += d.contact.frame[conid][0, xyz] * jac_dif
+#                 diff_i += d.contact.frame[conid][dimid2, xyz] * jac_dif
+#
+#             # Relative velocity along tangential direction
+#             rel_vel = diff_i * d.qvel[worldid, i]
+#
+#             # Differentiable friction scale
+#             mu_scaled = mu * wp.tanh(rel_vel / epsilon)
+#
+#             # Jacobian for this pyramid edge
+#             J = diff_0 + sign * mu_scaled * diff_i
+#
+#             d.efc.J[efcid, i] = J
+#             Jqvel += J * d.qvel[worldid, i]
+#
+#         _update_efc_row(
+#             m,
+#             d,
+#             worldid,
+#             efcid,
+#             pos,
+#             pos,
+#             invweight,
+#             d.contact.solref[conid],
+#             d.contact.solimp[conid],
+#             d.contact.includemargin[conid],
+#             refsafe,
+#             Jqvel,
+#         )
 @event_scope
 def make_constraint(m: types.Model, d: types.Data):
   """Creates constraint jacobians and other supporting data."""
