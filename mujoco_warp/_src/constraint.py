@@ -17,7 +17,7 @@ import warp as wp
 
 from . import types
 from .warp_util import event_scope
-
+from .deforamble_terrain import deformable_contact_model
 
 @wp.func
 def _update_efc_row(
