@@ -1,7 +1,10 @@
 import warp as wp
 import numpy as np
 from warp.types import *
-from warp.constants import _update_efc_row
+from warp.constraint import _update_efc_row
+
+# this is a temp file, remove later
+
 @wp.struct
 class TerrainParams:
     sigma_flat: float  # N/m^3

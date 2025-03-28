@@ -135,6 +135,8 @@ class ConeType(enum.IntEnum):
   """
 
   PYRAMIDAL = mujoco.mjtCone.mjCONE_PYRAMIDAL
+  DEFROMABLE = 2
+
   # unsupported: ELLIPTIC
 
 
@@ -613,6 +615,18 @@ class Model:
 
 
 @wp.struct
+class TerrainParams:
+    sigma_flat: wp.array(dtype=wp.float32, ndim=1)  # N/m^3
+    sigma_cone: wp.array(dtype=wp.float32, ndim=1)  # N/m^3
+    mu: wp.array(dtype=wp.float32, ndim=1)          # Friction coefficient
+    k_h: wp.array(dtype=wp.float32, ndim=1)         # HSR stiffness
+    b_h: wp.array(dtype=wp.float32, ndim=1)         # HSR damping
+    beta_d: wp.array(dtype=wp.float32, ndim=1)      # Depth scaling
+    rc: wp.array(dtype=wp.float32, ndim=1)          # Crater bottom radius
+    gamma_c: wp.array(dtype=wp.float32, ndim=1)     # Crater angle (radians)
+
+
+@wp.struct
 class Contact:
   """Contact data.
 
@@ -722,6 +736,7 @@ class Data:
     collision_type: collision types from broadphase             (nconmax,)
     collision_worldid: collision world ids from broadphase      (nconmax,)
     ncollision: collision count from broadphase                 ()
+    terrainParams: deformable terrain parameters 
   """
 
   ncon: wp.array(dtype=wp.int32, ndim=1)
@@ -798,3 +813,6 @@ class Data:
   collision_pair: wp.array(dtype=wp.vec2i, ndim=1)
   collision_worldid: wp.array(dtype=wp.int32, ndim=1)
   ncollision: wp.array(dtype=wp.int32, ndim=1)
+
+  # Deformable terrain params
+  terrainParams: TerrainParams

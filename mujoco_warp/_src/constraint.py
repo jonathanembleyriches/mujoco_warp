@@ -17,7 +17,6 @@ import warp as wp
 
 from . import types
 from .warp_util import event_scope
-from .deforamble_terrain import deformable_contact_model
 
 @wp.func
 def _update_efc_row(
@@ -316,6 +315,15 @@ def make_constraint(m: types.Model, d: types.Data):
     if (
       not (m.opt.disableflags & types.DisableBit.CONTACT.value)
       and m.opt.cone == types.ConeType.PYRAMIDAL.value
+    ):
+      wp.launch(
+        _efc_contact_pyramidal,
+        dim=(d.nconmax, 4),
+        inputs=[m, d, refsafe],
+      )
+    elif (
+      not (m.opt.disableflags & types.DisableBit.CONTACT.value)
+      and m.opt.cone == types.ConeType.DEFROMABLE.value
     ):
       wp.launch(
         _efc_contact_pyramidal,
