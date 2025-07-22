@@ -4,6 +4,18 @@
 MUJOCO_LOG.TXT
 
 
+## Cloned repositories
+## -------------------
+
+benchmark/mujoco_menagerie/
+
+
+## Created directories
+## --------------------
+
+benchmark/kitchen/combined_assets/
+kitchen_robot.xml
+
 # Language-specific files
 # =======================
 
@@ -206,3 +218,9 @@ Icon
 Network Trash Folder
 Temporary Items
 .apdisk
+
+# Node stuff
+node_modules
+
+# VS Code
+.vscode/

@@ -24,8 +24,7 @@ from absl.testing import parameterized
 import mujoco_warp as mjwarp
 
 from . import test_util
-
-wp.config.verify_cuda = True
+from .types import ConeType
 
 # tolerance for difference between MuJoCo and MJWarp support calculations - mostly
 # due to float precision
@@ -56,8 +55,7 @@ class SupportTest(parameterized.TestCase):
     _assert_eq(res.numpy()[0], mj_res, f"mul_m ({'sparse' if sparse else 'dense'})")
 
   def test_xfrc_accumulated(self):
-    """Tests that xfrc_accumulate ouput matches mj_xfrcAccumulate."""
-    np.random.seed(0)
+    """Tests that xfrc_accumulate output matches mj_xfrcAccumulate."""
     mjm, mjd, m, d = test_util.fixture("pendula.xml")
     xfrc = np.random.randn(*d.xfrc_applied.numpy().shape)
     d.xfrc_applied = wp.from_numpy(xfrc, dtype=wp.spatial_vector)
@@ -67,23 +65,57 @@ class SupportTest(parameterized.TestCase):
     qfrc_expected = np.zeros(m.nv)
     xfrc = xfrc[0]
     for i in range(1, m.nbody):
-      mujoco.mj_applyFT(
-        mjm, mjd, xfrc[i, :3], xfrc[i, 3:], mjd.xipos[i], i, qfrc_expected
-      )
+      mujoco.mj_applyFT(mjm, mjd, xfrc[i, :3], xfrc[i, 3:], mjd.xipos[i], i, qfrc_expected)
     np.testing.assert_almost_equal(qfrc.numpy()[0], qfrc_expected, 6)
 
-  def test_make_put_data(self):
-    """Tests that make_put_data and put_data are producing the same shapes for all warp arrays."""
-    mjm, mjd, m, d = test_util.fixture("pendula.xml")
-    md = mjwarp.make_data(mjm)
+  @parameterized.parameters(
+    (ConeType.PYRAMIDAL, 1, False),
+    (ConeType.PYRAMIDAL, 3, False),
+    (ConeType.PYRAMIDAL, 4, False),
+    (ConeType.PYRAMIDAL, 6, False),
+    (ConeType.PYRAMIDAL, 1, True),
+    (ConeType.PYRAMIDAL, 3, True),
+    (ConeType.PYRAMIDAL, 4, True),
+    (ConeType.PYRAMIDAL, 6, True),
+    (ConeType.ELLIPTIC, 1, False),
+    (ConeType.ELLIPTIC, 3, False),
+    (ConeType.ELLIPTIC, 4, False),
+    (ConeType.ELLIPTIC, 6, False),
+    (ConeType.ELLIPTIC, 1, True),
+    (ConeType.ELLIPTIC, 3, True),
+    (ConeType.ELLIPTIC, 4, True),
+    (ConeType.ELLIPTIC, 6, True),
+  )
+  def test_contact_force(self, cone, condim, to_world_frame):
+    _CONTACT = f"""
+      <mujoco>
+        <worldbody>
+          <geom type="plane" size="10 10 .001"/>
+          <body pos="0 0 1">
+            <freejoint/>
+            <geom fromto="-.4 0 0 .4 0 0" size=".05 .1" type="capsule" condim="{condim}" friction="1 1 1"/>
+          </body>
+        </worldbody>
+        <keyframe>
+          <key qpos="0 0 0.04 1 0 0 0" qvel="-1 -1 -1 .1 .1 .1"/>
+        </keyframe>
+      </mujoco>
+    """
+    mjm, mjd, m, d = test_util.fixture(xml=_CONTACT, cone=cone, keyframe=0)
 
-    # same number of fields
-    self.assertEqual(len(d.__dict__), len(md.__dict__))
+    mj_force = np.zeros(6, dtype=float)
+    mujoco.mj_contactForce(mjm, mjd, 0, mj_force)
 
-    # test shapes for all arrays
-    for attr, val in md.__dict__.items():
-      if isinstance(val, wp.array):
-        self.assertEqual(val.shape, getattr(d, attr).shape)
+    contact_ids = wp.zeros(1, dtype=int)
+    force = wp.zeros(1, dtype=wp.spatial_vector)
+
+    mjwarp.contact_force(m, d, contact_ids, to_world_frame, force)
+
+    if to_world_frame:
+      frame = mjd.contact.frame[0].reshape((3, 3))
+      mj_force = np.concatenate([frame.T @ mj_force[:3], frame.T @ mj_force[3:]])
+
+    _assert_eq(force.numpy()[0], mj_force, "contact force")
 
 
 if __name__ == "__main__":

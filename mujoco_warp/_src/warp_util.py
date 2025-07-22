@@ -16,12 +16,10 @@
 import functools
 from typing import Callable, Optional
 
-import numpy as np
 import warp as wp
 from warp.context import Module
+from warp.context import assert_conditional_graph_support
 from warp.context import get_module
-
-from . import types
 
 _STACK = None
 
@@ -91,7 +89,7 @@ def _merge(a: dict, b: dict) -> dict:
 
 
 def event_scope(fn, name: str = ""):
-  """Wraps a function and records an event before and after the fucntion invocation."""
+  """Wraps a function and records an event before and after the function invocation."""
   name = name or getattr(fn, "__name__")
 
   @functools.wraps(fn)
@@ -135,28 +133,31 @@ def kernel(
 
       @kernel
       def my_kernel(a: wp.array(dtype=float), b: wp.array(dtype=float)):
-          tid = wp.tid()
-          b[tid] = a[tid] + 1.0
+        tid = wp.tid()
+        b[tid] = a[tid] + 1.0
 
 
       @kernel(enable_backward=False)
       def my_kernel_no_backward(a: wp.array(dtype=float, ndim=2), x: float):
-          # the backward pass will not be generated
-          i, j = wp.tid()
-          a[i, j] = x
+        # the backward pass will not be generated
+        i, j = wp.tid()
+        a[i, j] = x
 
 
       @kernel(module="unique")
       def my_kernel_unique_module(a: wp.array(dtype=float), b: wp.array(dtype=float)):
-          # the kernel will be registered in new unique module created just for this
-          # kernel and its dependent functions and structs
-          tid = wp.tid()
-          b[tid] = a[tid] + 1.0
+        # the kernel will be registered in new unique module created just for this
+        # kernel and its dependent functions and structs
+        tid = wp.tid()
+        b[tid] = a[tid] + 1.0
 
   Args:
       f: The function to be registered as a kernel.
       enable_backward: If False, the backward pass will not be generated.
-      module: The :class:`warp.context.Module` to which the kernel belongs. Alternatively, if a string `"unique"` is provided, the kernel is assigned to a new module named after the kernel name and hash. If None, the module is inferred from the function's module.
+      module: The :class:`warp.context.Module` to which the kernel belongs. Alternatively,
+              if a string `"unique"` is provided, the kernel is assigned to a new module
+              named after the kernel name and hash. If None, the module is inferred from
+              the function's module.
 
   Returns:
       The registered kernel.
@@ -172,75 +173,24 @@ def kernel(
   return wp.kernel(f, enable_backward=enable_backward, module=module)
 
 
-@wp.kernel
-def _copy_2df(dest: types.array2df, src: types.array2df):
-  i, j = wp.tid()
-  dest[i, j] = src[i, j]
+_KERNEL_CACHE = {}
 
 
-@wp.kernel
-def _copy_3df(dest: types.array3df, src: types.array3df):
-  i, j, k = wp.tid()
-  dest[i, j, k] = src[i, j, k]
+def cache_kernel(func):
+  # caching kernels to avoid crashes in graph_conditional code
+  @functools.wraps(func)
+  def wrapper(*args):
+    key = tuple(a.size if hasattr(a, "size") else hash(a) for a in args) + (hash(func.__name__),)
+    if key not in _KERNEL_CACHE:
+      _KERNEL_CACHE[key] = func(*args)
+    return _KERNEL_CACHE[key]
+
+  return wrapper
 
 
-@wp.kernel
-def _copy_2dvec10f(
-  dest: wp.array2d(dtype=types.vec10f), src: wp.array2d(dtype=types.vec10f)
-):
-  i, j = wp.tid()
-  dest[i, j] = src[i, j]
-
-
-@wp.kernel
-def _copy_2dvec3f(dest: wp.array2d(dtype=wp.vec3f), src: wp.array2d(dtype=wp.vec3f)):
-  i, j = wp.tid()
-  dest[i, j] = src[i, j]
-
-
-@wp.kernel
-def _copy_2dmat33f(dest: wp.array2d(dtype=wp.mat33f), src: wp.array2d(dtype=wp.mat33f)):
-  i, j = wp.tid()
-  dest[i, j] = src[i, j]
-
-
-@wp.kernel
-def _copy_2dspatialf(
-  dest: wp.array2d(dtype=wp.spatial_vector), src: wp.array2d(dtype=wp.spatial_vector)
-):
-  i, j = wp.tid()
-  dest[i, j] = src[i, j]
-
-
-# TODO(team): remove kernel_copy once wp.copy is supported in cuda subgraphs
-
-
-def kernel_copy(dest: wp.array, src: wp.array):
-  if src.shape != dest.shape:
-    raise ValueError("only same shape copying allowed")
-
-  if src.dtype != dest.dtype:
-    if (src.dtype, dest.dtype) not in (
-      (wp.float32, np.float32),
-      (np.float32, wp.float32),
-      (wp.int32, np.int32),
-      (np.int32, wp.int32),
-    ):
-      raise ValueError(f"only same dtype copying allowed: {src.dtype} != {dest.dtype}")
-
-  if src.ndim == 2 and src.dtype == wp.float32:
-    kernel = _copy_2df
-  elif src.ndim == 3 and src.dtype == wp.float32:
-    kernel = _copy_3df
-  elif src.ndim == 2 and src.dtype == wp.vec3f:
-    kernel = _copy_2dvec3f
-  elif src.ndim == 2 and src.dtype == wp.mat33f:
-    kernel = _copy_2dmat33f
-  elif src.ndim == 2 and src.dtype == types.vec10f:
-    kernel = _copy_2dvec10f
-  elif src.ndim == 2 and src.dtype == wp.spatial_vector:
-    kernel = _copy_2dspatialf
-  else:
-    raise NotImplementedError("copy not supported for these array types")
-
-  wp.launch(kernel=kernel, dim=src.shape, inputs=[dest, src])
+def conditional_graph_supported():
+  try:
+    assert_conditional_graph_support()
+  except Exception:
+    return False
+  return True

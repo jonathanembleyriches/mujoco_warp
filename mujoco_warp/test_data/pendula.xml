@@ -20,15 +20,22 @@
   <worldbody>
     <site name="origin"/>
     <camera pos="0 1.5 0.8" xyaxes="-1 0 0 0 -0.2 .8"/>
+    <light pos="0 1.5 0.8" dir="0.1 -0.9 0"/>
     <camera mode="targetbodycom" pos="1 -1 2"/>
+    <light mode="targetbodycom" pos="1 -1 2"/>
     <camera mode="targetbodycom" target="body" pos="0 -1 2"/>
+    <light mode="targetbodycom" target="body" pos="0 -1 2"/>
     <camera mode="targetbody" target="body" pos="0 -1 -2"/>
+    <light mode="targetbody" target="body" pos="0 -1 -2"/>
 
     <!-- a single free body -->
     <body pos="0 0 0">
       <camera mode="fixed" pos="0 0.1 0.1" euler="2.7 0 0"/>
+      <light mode="fixed" pos="0 0.1 0.1" dir="0 0.02 -0.98"/>
       <camera pos="-3 0 1" xyaxes="0 -1 0 1 0 2" mode="trackcom"/>
+      <light pos="-3 0 1" dir="0 -1 0" mode="trackcom"/>
       <camera pos="-3 0 1" xyaxes="0 -1 0 1 0 2" mode="track"/>
+      <light pos="-3 0 1" dir="0 -1 0" mode="track"/>
       <freejoint/>
       <geom/>
     </body>
@@ -112,7 +119,7 @@
     </body>
 
     <!-- triple pendulum of hinges with gravcomp -->
-    <!-- <body pos="3.0 0 0" gravcomp="1">
+    <body pos="3.0 0 0" gravcomp="1">
       <joint name="joint15" axis="0.1 0.2 0.3" type="hinge"/>
       <geom/>
       <body pos="0 0 -0.8" gravcomp="2">
@@ -123,7 +130,7 @@
           <geom/>
         </body>
       </body>
-    </body> -->
+    </body>
 
     <body mocap="true">
       <geom type="sphere" size="0.05"/>
@@ -133,7 +140,7 @@
     </body>
   </worldbody>
 
-  <!-- <tendon>
+  <tendon>
     <fixed name="tendon_1" limited="true" range="-0.3 0.1" stiffness=".1" damping=".2">
       <joint joint="joint2" coef=".1"/>
       <joint joint="joint3" coef="-.2"/>
@@ -142,7 +149,7 @@
       <joint joint="joint4" coef=".3"/>
       <joint joint="joint5" coef="-.4"/>
     </fixed>
-  </tendon> -->
+  </tendon>
 
   <actuator>
     <motor gear="250 0 0" joint="joint1" name="act1"/>
@@ -150,10 +157,10 @@
     <motor gear="0 0 300" joint="joint1" name="act3"/>
     <motor gear="275" joint="joint2" name="act4"/>
     <motor gear="275" joint="joint3" name="act5"/>
-    <!-- <motor gear="150" joint="joint15" name="act6"/>
+    <motor gear="150" joint="joint15" name="act6"/>
     <motor gear="150" joint="joint16" name="act7"/>
-    <motor gear="150" joint="joint17" name="act8"/> -->
-    <!-- <position tendon="tendon_2" kp="100"/> -->
+    <motor gear="150" joint="joint17" name="act8"/>
+    <position tendon="tendon_2" kp="100"/>
     <motor gear="2 3 4" jointinparent="joint1"/>
     <motor gear="5 6 7 8 9 10" jointinparent="freejoint"/>
   </actuator>

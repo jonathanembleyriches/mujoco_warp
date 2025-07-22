@@ -20,13 +20,15 @@ import numpy as np
 import warp as wp
 from absl.testing import absltest
 from absl.testing import parameterized
-from etils import epath
 
 import mujoco_warp as mjwarp
 
 from . import solver
+from . import test_util
+from .types import ConeType
+from .types import SolverType
 
-# tolerance for difference between MuJoCo and MJWarp smooth calculations - mostly
+# tolerance for difference between MuJoCo and MJWarp solver calculations - mostly
 # due to float precision
 _TOLERANCE = 5e-3
 
@@ -38,59 +40,16 @@ def _assert_eq(a, b, name):
 
 
 class SolverTest(parameterized.TestCase):
-  def _load(
-    self,
-    fname: str,
-    is_sparse: bool = True,
-    cone: int = mujoco.mjtCone.mjCONE_PYRAMIDAL,
-    solver_: int = mujoco.mjtSolver.mjSOL_NEWTON,
-    iterations: int = 2,
-    ls_iterations: int = 4,
-    nworld: int = 1,
-    njmax: int = 512,
-    keyframe: int = 0,
-    ls_parallel: bool = False,
-  ):
-    path = epath.resource_path("mujoco_warp") / "test_data" / fname
-    mjm = mujoco.MjModel.from_xml_path(path.as_posix())
-    mjm.opt.jacobian = is_sparse
-    mjm.opt.iterations = iterations
-    mjm.opt.ls_iterations = ls_iterations
-    mjm.opt.cone = cone
-    mjm.opt.solver = solver_
-    mjm.opt.disableflags |= mujoco.mjtDisableBit.mjDSBL_FRICTIONLOSS
-    mjd = mujoco.MjData(mjm)
-    mujoco.mj_resetDataKeyframe(mjm, mjd, keyframe)
-    mujoco.mj_step(mjm, mjd)
-    m = mjwarp.put_model(mjm)
-    m.opt.ls_parallel = ls_parallel
-    d = mjwarp.put_data(mjm, mjd, nworld=nworld, njmax=njmax)
-    return mjm, mjd, m, d
-
-  @parameterized.parameters(
-    (mujoco.mjtCone.mjCONE_PYRAMIDAL, mujoco.mjtSolver.mjSOL_CG, 25, 5, False, False),
-    (
-      mujoco.mjtCone.mjCONE_PYRAMIDAL,
-      mujoco.mjtSolver.mjSOL_NEWTON,
-      2,
-      4,
-      False,
-      False,
-    ),
-    (mujoco.mjtCone.mjCONE_PYRAMIDAL, mujoco.mjtSolver.mjSOL_NEWTON, 2, 4, True, True),
-  )
-  def test_solve(self, cone, solver_, iterations, ls_iterations, sparse, ls_parallel):
-    """Tests solve."""
+  @parameterized.product(cone=tuple(ConeType), solver_=tuple(SolverType))
+  def test_cost(self, cone, solver_):
+    """Tests cost function is correct."""
     for keyframe in range(3):
-      mjm, mjd, m, d = self._load(
-        "humanoid/humanoid.xml",
-        is_sparse=sparse,
-        cone=cone,
-        solver_=solver_,
-        iterations=iterations,
-        ls_iterations=ls_iterations,
+      mjm, mjd, m, d = test_util.fixture(
+        "constraints.xml",
         keyframe=keyframe,
-        ls_parallel=ls_parallel,
+        cone=cone,
+        solver=solver_,
+        iterations=0,
       )
 
       def cost(qacc):
@@ -102,18 +61,39 @@ class SolverTest(parameterized.TestCase):
 
       mj_cost = cost(mjd.qacc)
 
-      solver._create_context(m, d)
+      # solve with 0 iterations just initializes constraints and costs and then exits
+      mjwarp.solve(m, d)
 
       mjwarp_cost = d.efc.cost.numpy()[0] - d.efc.gauss.numpy()[0]
 
       _assert_eq(mjwarp_cost, mj_cost, name="cost")
 
+  @parameterized.parameters(
+    (ConeType.PYRAMIDAL, SolverType.CG, 5, 5, False, False),
+    (ConeType.ELLIPTIC, SolverType.CG, 5, 5, False, False),
+    (ConeType.PYRAMIDAL, SolverType.NEWTON, 2, 4, False, False),
+    (ConeType.ELLIPTIC, SolverType.NEWTON, 2, 5, False, False),
+    (ConeType.PYRAMIDAL, SolverType.NEWTON, 2, 4, True, True),
+    (ConeType.ELLIPTIC, SolverType.NEWTON, 3, 16, True, True),
+  )
+  def test_solve(self, cone, solver_, iterations, ls_iterations, sparse, ls_parallel):
+    """Tests solve."""
+    for keyframe in range(3):
+      mjm, mjd, m, d = test_util.fixture(
+        "constraints.xml",
+        keyframe=keyframe,
+        sparse=sparse,
+        cone=cone,
+        solver=solver_,
+        iterations=iterations,
+        ls_iterations=ls_iterations,
+        ls_parallel=ls_parallel,
+      )
+
       qacc_warmstart = mjd.qacc_warmstart.copy()
       mujoco.mj_forward(mjm, mjd)
       mjd.qacc_warmstart = qacc_warmstart
 
-      m = mjwarp.put_model(mjm)
-      d = mjwarp.put_data(mjm, mjd, njmax=mjd.nefc)
       d.qacc.zero_()
       d.qfrc_constraint.zero_()
       d.efc.force.zero_()
@@ -121,6 +101,13 @@ class SolverTest(parameterized.TestCase):
       if solver_ == mujoco.mjtSolver.mjSOL_CG:
         mjwarp.factor_m(m, d)
       mjwarp.solve(m, d)
+
+      def cost(qacc):
+        jaref = np.zeros(mjd.nefc, dtype=float)
+        cost = np.zeros(1)
+        mujoco.mj_mulJacVec(mjm, mjd, jaref, qacc)
+        mujoco.mj_constraintUpdate(mjm, mjd, jaref - mjd.efc_aref, cost, 0)
+        return cost
 
       mj_cost = cost(mjd.qacc)
       mjwarp_cost = cost(d.qacc.numpy()[0])
@@ -132,64 +119,66 @@ class SolverTest(parameterized.TestCase):
         _assert_eq(d.efc.force.numpy()[: mjd.nefc], mjd.efc_force, "efc_force")
 
   @parameterized.parameters(
-    (mujoco.mjtCone.mjCONE_PYRAMIDAL, mujoco.mjtSolver.mjSOL_CG, 25, 5),
-    (mujoco.mjtCone.mjCONE_PYRAMIDAL, mujoco.mjtSolver.mjSOL_NEWTON, 2, 4),
+    (ConeType.PYRAMIDAL, SolverType.CG, 25, 5),
+    (ConeType.PYRAMIDAL, SolverType.NEWTON, 2, 4),
   )
   def test_solve_batch(self, cone, solver_, iterations, ls_iterations):
     """Tests solve (batch)."""
-    mjm0, mjd0, _, _ = self._load(
+
+    mjm0, mjd0, _, _ = test_util.fixture(
       "humanoid/humanoid.xml",
-      is_sparse=False,
+      keyframe=0,
+      sparse=False,
       cone=cone,
-      solver_=solver_,
+      solver=solver_,
       iterations=iterations,
       ls_iterations=ls_iterations,
-      keyframe=0,
     )
     qacc_warmstart0 = mjd0.qacc_warmstart.copy()
     mujoco.mj_forward(mjm0, mjd0)
     mjd0.qacc_warmstart = qacc_warmstart0
 
-    mjm1, mjd1, _, _ = self._load(
+    mjm1, mjd1, _, _ = test_util.fixture(
       "humanoid/humanoid.xml",
-      is_sparse=False,
+      keyframe=2,
+      sparse=False,
       cone=cone,
-      solver_=solver_,
+      solver=solver_,
       iterations=iterations,
       ls_iterations=ls_iterations,
-      keyframe=2,
     )
     qacc_warmstart1 = mjd1.qacc_warmstart.copy()
     mujoco.mj_forward(mjm1, mjd1)
     mjd1.qacc_warmstart = qacc_warmstart1
 
-    mjm2, mjd2, _, _ = self._load(
+    mjm2, mjd2, _, _ = test_util.fixture(
       "humanoid/humanoid.xml",
-      is_sparse=False,
+      keyframe=1,
+      sparse=False,
       cone=cone,
-      solver_=solver_,
+      solver=solver_,
       iterations=iterations,
       ls_iterations=ls_iterations,
-      keyframe=1,
     )
     qacc_warmstart2 = mjd2.qacc_warmstart.copy()
     mujoco.mj_forward(mjm2, mjd2)
     mjd2.qacc_warmstart = qacc_warmstart2
 
     nefc_active = mjd0.nefc + mjd1.nefc + mjd2.nefc
+    ne_active = mjd0.ne + mjd1.ne + mjd2.ne
 
-    mjm, _, m, d = self._load(
+    mjm, mjd, m, _ = test_util.fixture(
       "humanoid/humanoid.xml",
-      is_sparse=False,
+      sparse=False,
       cone=cone,
-      solver_=solver_,
+      solver=solver_,
       iterations=iterations,
       ls_iterations=ls_iterations,
-      nworld=3,
-      njmax=2 * nefc_active,
     )
+    d = mjwarp.put_data(mjm, mjd, nworld=3, njmax=2 * nefc_active)
 
     d.nefc = wp.array([nefc_active], dtype=wp.int32, ndim=1)
+    d.ne = wp.array([ne_active], dtype=wp.int32, ndim=1)
 
     nefc_fill = d.njmax - nefc_active
 
@@ -230,22 +219,74 @@ class SolverTest(parameterized.TestCase):
       ]
     )
 
+    # Reshape the Jacobians
     efc_J0 = mjd0.efc_J.reshape((mjd0.nefc, mjm0.nv))
     efc_J1 = mjd1.efc_J.reshape((mjd1.nefc, mjm1.nv))
     efc_J2 = mjd2.efc_J.reshape((mjd2.nefc, mjm2.nv))
 
-    efc_J_fill = np.vstack([efc_J0, efc_J1, efc_J2, np.zeros((nefc_fill, mjm.nv))])
+    # Extract equality constraints (first ne rows) from each world
+    eq_J0 = efc_J0[: mjd0.ne]
+    eq_J1 = efc_J1[: mjd1.ne]
+    eq_J2 = efc_J2[: mjd2.ne]
 
-    efc_D_fill = np.concatenate(
-      [mjd0.efc_D, mjd1.efc_D, mjd2.efc_D, np.zeros(nefc_fill)]
+    # Extract inequality constraints (remaining rows) from each world
+    ineq_J0 = efc_J0[mjd0.ne :]
+    ineq_J1 = efc_J1[mjd1.ne :]
+    ineq_J2 = efc_J2[mjd2.ne :]
+
+    # Stack all equality constraints first, then all inequality constraints
+    efc_J_fill = np.vstack(
+      [
+        eq_J0,
+        eq_J1,
+        eq_J2,  # All equality constraints grouped together
+        ineq_J0,
+        ineq_J1,
+        ineq_J2,  # All inequality constraints
+        np.full((nefc_fill, mjm.nv), np.nan),  # Padding
+      ]
     )
+
+    # Similarly for D and aref values
+    eq_D0 = mjd0.efc_D[: mjd0.ne]
+    eq_D1 = mjd1.efc_D[: mjd1.ne]
+    eq_D2 = mjd2.efc_D[: mjd2.ne]
+    ineq_D0 = mjd0.efc_D[mjd0.ne :]
+    ineq_D1 = mjd1.efc_D[mjd1.ne :]
+    ineq_D2 = mjd2.efc_D[mjd2.ne :]
+
+    efc_D_fill = np.concatenate([eq_D0, eq_D1, eq_D2, ineq_D0, ineq_D1, ineq_D2, np.zeros(nefc_fill)])
+
+    eq_aref0 = mjd0.efc_aref[: mjd0.ne]
+    eq_aref1 = mjd1.efc_aref[: mjd1.ne]
+    eq_aref2 = mjd2.efc_aref[: mjd2.ne]
+    ineq_aref0 = mjd0.efc_aref[mjd0.ne :]
+    ineq_aref1 = mjd1.efc_aref[mjd1.ne :]
+    ineq_aref2 = mjd2.efc_aref[mjd2.ne :]
 
     efc_aref_fill = np.concatenate(
-      [mjd0.efc_aref, mjd1.efc_aref, mjd2.efc_aref, np.zeros(nefc_fill)]
+      [
+        eq_aref0,
+        eq_aref1,
+        eq_aref2,
+        ineq_aref0,
+        ineq_aref1,
+        ineq_aref2,
+        np.zeros(nefc_fill),
+      ]
     )
 
+    # World IDs need to match the new ordering
     efc_worldid = np.concatenate(
-      [[0] * mjd0.nefc, [1] * mjd1.nefc, [2] * mjd2.nefc, [-1] * nefc_fill]
+      [
+        [0] * mjd0.ne,
+        [1] * mjd1.ne,
+        [2] * mjd2.ne,  # Equality constraints
+        [0] * (mjd0.nefc - mjd0.ne),
+        [1] * (mjd1.nefc - mjd1.ne),  # Inequality constraints
+        [2] * (mjd2.nefc - mjd2.ne),
+        [-1] * nefc_fill,  # Padding
+      ]
     )
 
     d.qacc_warmstart = wp.from_numpy(qacc_warmstart, dtype=wp.float32)
@@ -257,7 +298,7 @@ class SolverTest(parameterized.TestCase):
     d.efc.aref = wp.from_numpy(efc_aref_fill, dtype=wp.float32)
     d.efc.worldid = wp.from_numpy(efc_worldid, dtype=wp.int32)
 
-    if solver_ == mujoco.mjtSolver.mjSOL_CG:
+    if solver_ == SolverType.CG:
       m0 = mjwarp.put_model(mjm0)
       d0 = mjwarp.put_data(mjm0, mjd0)
       mjwarp.factor_m(m0, d0)
@@ -300,7 +341,7 @@ class SolverTest(parameterized.TestCase):
     mjwarp_cost2 = cost(mjm2, mjd2, d.qacc.numpy()[2])
     self.assertLessEqual(mjwarp_cost2, mj_cost2 * 1.025)
 
-    if m.opt.solver == mujoco.mjtSolver.mjSOL_NEWTON:
+    if m.opt.solver == SolverType.NEWTON:
       _assert_eq(d.qacc.numpy()[0], mjd0.qacc, "qacc0")
       _assert_eq(d.qacc.numpy()[1], mjd1.qacc, "qacc1")
       _assert_eq(d.qacc.numpy()[2], mjd2.qacc, "qacc2")
@@ -309,21 +350,37 @@ class SolverTest(parameterized.TestCase):
       _assert_eq(d.qfrc_constraint.numpy()[1], mjd1.qfrc_constraint, "qfrc_constraint1")
       _assert_eq(d.qfrc_constraint.numpy()[2], mjd2.qfrc_constraint, "qfrc_constraint2")
 
-      _assert_eq(
-        d.efc.force.numpy()[: mjd0.nefc],
-        mjd0.efc_force,
-        "efc_force0",
-      )
-      _assert_eq(
-        d.efc.force.numpy()[mjd0.nefc : mjd0.nefc + mjd1.nefc],
-        mjd1.efc_force,
-        "efc_force1",
-      )
-      _assert_eq(
-        d.efc.force.numpy()[mjd0.nefc + mjd1.nefc : mjd0.nefc + mjd1.nefc + mjd2.nefc],
-        mjd2.efc_force,
-        "efc_force2",
-      )
+      # Get world 0 forces - equality constraints at start, inequality constraints later
+      nieq0 = mjd0.nefc - mjd0.ne
+      nieq1 = mjd1.nefc - mjd1.ne
+      nieq2 = mjd2.nefc - mjd2.ne
+      world0_eq_forces = d.efc.force.numpy()[: mjd0.ne]
+      world0_ineq_forces = d.efc.force.numpy()[ne_active : ne_active + nieq0]
+      world0_forces = np.concatenate([world0_eq_forces, world0_ineq_forces])
+      _assert_eq(world0_forces, mjd0.efc_force, "efc_force0")
+
+      # Get world 1 forces
+      world1_eq_forces = d.efc.force.numpy()[mjd0.ne : mjd0.ne + mjd1.ne]
+      world1_ineq_forces = d.efc.force.numpy()[ne_active + nieq0 : ne_active + nieq0 + nieq1]
+      world1_forces = np.concatenate([world1_eq_forces, world1_ineq_forces])
+      _assert_eq(world1_forces, mjd1.efc_force, "efc_force1")
+
+      # Get world 2 forces
+      world2_eq_forces = d.efc.force.numpy()[mjd0.ne + mjd1.ne : ne_active]
+      world2_ineq_forces = d.efc.force.numpy()[ne_active + nieq0 + nieq1 : ne_active + nieq0 + nieq1 + nieq2]
+      world2_forces = np.concatenate([world2_eq_forces, world2_ineq_forces])
+      _assert_eq(world2_forces, mjd2.efc_force, "efc_force2")
+
+  def test_frictionloss(self):
+    """Tests solver with frictionloss."""
+    for keyframe in range(3):
+      _, mjd, m, d = test_util.fixture("constraints.xml", keyframe=keyframe)
+      mjwarp.solve(m, d)
+
+      _assert_eq(d.nf.numpy()[0], mjd.nf, "nf")
+      _assert_eq(d.qacc.numpy()[0], mjd.qacc, "qacc")
+      _assert_eq(d.qfrc_constraint.numpy()[0], mjd.qfrc_constraint, "qfrc_constraint")
+      _assert_eq(d.efc.force.numpy()[: mjd.nefc], mjd.efc_force, "efc_force")
 
 
 if __name__ == "__main__":
